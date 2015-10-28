@@ -1,0 +1,23 @@
+# Configuration file for Midas system
+
+[global]
+train_dir = ../data/cg-lit/train
+dev_dir = ../data/cg-lit/dev
+test_dir = ../data/relig/test
+context_representation = flat_embeddings
+pretrain_embeddings = True
+target_representation = flat_convolution
+include_target_one_hot = True
+max_pooling = False
+std_token_len = 15
+nb_left_tokens = 2
+left_char_len = 50
+nb_right_tokens = 1
+right_char_len = 25
+nb_epochs = 100
+batch_size = 50
+nb_filters = 2048
+filter_length = 3
+nb_dense_dims = 1024
+embedding_dims = 300
+
