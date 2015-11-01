@@ -2,14 +2,19 @@ from __future__ import print_function
 
 import ConfigParser
 from operator import itemgetter
-
-import numpy as np
 from sklearn.preprocessing import LabelEncoder
+import matplotlib
+matplotlib.use('Agg') # Must be before importing matplotlib.pyplot or pylab!
+import matplotlib.pyplot as plt
+import numpy as np
+import keras
 from keras.utils import np_utils
-
 from embeddings import EmbeddingsPretrainer
 import utils
 from model import build_model
+
+font = {'size' : 10}
+plt.rc('font', **font)
 
 
 class Tagger:
@@ -278,6 +283,10 @@ class Tagger:
         self.model.load_weights(filename)
 
     def fit(self, filename='weights.hdf5'):
+        train_losses, dev_losses = [], []
+        train_accs, dev_accs = [], []
+        dev_known_accs, dev_unknown_accs = [], []
+
         for e in range(self.nb_epochs):
             # save
             self.model.save_weights(filename, overwrite=True)
@@ -285,43 +294,57 @@ class Tagger:
             self.plot_filters()
             if self.context_representation != 'None':
                 print("-> epoch ", e+1, "...")
-                self.model.fit({'left_input': self.train_left_X,
+                d = {'left_input': self.train_left_X,
                             'target_input': self.train_tokens_X,
                             'right_input': self.train_right_X,
                             'target_one_hot_input': self.train_target_one_hots,
                             'label_output': self.train_y,
-                            },
-                            nb_epoch = 1,
-                            batch_size = self.batch_size)
+                    }
+                self.model.fit(data=d,
+                               nb_epoch = 1,
+                               batch_size = self.batch_size)
 
                 print("+++ TRAIN SCORE")
+                train_loss = self.model.evaluate(data=d, batch_size = self.batch_size)
+                print("\t - loss:\t{:.3}".format(train_loss))
+                train_losses.append(train_loss)
+
                 train_predictions = self.model.predict({'left_input': self.train_left_X,
                                           'target_input': self.train_tokens_X,
                                           'target_one_hot_input': self.train_target_one_hots,
                                           'right_input': self.train_right_X,
                                          },
                                          batch_size = self.batch_size)
-                all_acc, _, _ = utils.accuracies(predictions = train_predictions,
+                train_all_acc, _, _ = utils.accuracies(predictions = train_predictions,
                                                                    gold_labels = self.train_int_labels,
                                                                    test_tokens = self.train_tokens,
                                                                    train_token_set = self.train_token_set)
-                print("\t - all acc:\t{:.2%}".format(all_acc))
+                print("\t - all acc:\t{:.2%}".format(train_all_acc))
+                train_accs.append(train_all_acc)
                 
                 if self.dev_dir:
                     print("+++ DEV SCORE")
-                    dev_predictions = self.model.predict({'left_input': self.dev_left_X,
-                                              'target_input': self.dev_tokens_X,
-                                              'right_input': self.dev_right_X,
-                                              'target_one_hot_input': self.dev_target_one_hots,
-                                             },
-                                             batch_size = self.batch_size)
-                    all_acc, known_acc, unknown_acc = utils.accuracies(predictions = dev_predictions,
+                    d = {'left_input': self.dev_left_X,
+                         'target_input': self.dev_tokens_X,
+                         'right_input': self.dev_right_X,
+                         'target_one_hot_input': self.dev_target_one_hots,
+                        }
+                    dev_predictions = self.model.predict(data=d, batch_size = self.batch_size)
+                    d['label_output'] = self.dev_y
+                    dev_loss = self.model.evaluate(data=d, batch_size = self.batch_size)
+                    print("\t - loss:\t{:.3}".format(dev_loss))
+                    dev_losses.append(dev_loss)
+                    dev_all_acc, dev_known_acc, dev_unknown_acc = utils.accuracies(predictions = dev_predictions,
                                                                        gold_labels = self.dev_int_labels,
                                                                        test_tokens = self.dev_tokens,
                                                                        train_token_set = self.train_token_set)
-                    print("\t - all acc:\t{:.2%}".format(all_acc))
-                    print("\t - known acc:\t{:.2%}".format(known_acc))
-                    print("\t - unknown acc:\t{:.2%}".format(unknown_acc))
+                    dev_accs.append(dev_all_acc)
+                    dev_known_accs.append(dev_known_acc)
+                    dev_unknown_accs.append(dev_unknown_acc)
+
+                    print("\t - all acc:\t{:.2%}".format(dev_all_acc))
+                    print("\t - known acc:\t{:.2%}".format(dev_known_acc))
+                    print("\t - unknown acc:\t{:.2%}".format(dev_unknown_acc))
 
                 print("+++ TEST SCORE")
                 test_predictions = self.model.predict({'left_input': self.test_left_X,
@@ -330,15 +353,61 @@ class Tagger:
                                           'target_one_hot_input': self.test_target_one_hots,
                                          },
                                          batch_size = self.batch_size)
-                all_acc, known_acc, unknown_acc = utils.accuracies(predictions = test_predictions,
+                test_all_acc, test_known_acc, test_unknown_acc = utils.accuracies(predictions = test_predictions,
                                                                    gold_labels = self.test_int_labels,
                                                                    test_tokens = self.test_tokens,
                                                                    train_token_set = self.train_token_set)
-                print("\t - all acc:\t{:.2%}".format(all_acc))
-                print("\t - known acc:\t{:.2%}".format(known_acc))
-                print("\t - unknown acc:\t{:.2%}".format(unknown_acc))
+                print("\t - all acc:\t{:.2%}".format(test_all_acc))
+                print("\t - known acc:\t{:.2%}".format(test_known_acc))
+                print("\t - unknown acc:\t{:.2%}".format(test_unknown_acc))
 
-                #self.plot_filters()
+                plt.clf()
+                f, ax = plt.subplots(1,1)
+                plt.tick_params(axis='both', which='major', labelsize=6)
+                plt.tick_params(axis='both', which='minor', labelsize=6)
+                plt.xlabel('Epoch')
+                plt.ylabel('Loss')
+                ax.plot(train_losses, c='b')
+                if self.dev_dir:
+                    ax.plot(dev_losses, c='g')
+                ax2 = plt.gca().twinx()
+                plt.tick_params(axis='both', which='major', labelsize=6)
+                plt.tick_params(axis='both', which='minor', labelsize=6)
+                ax2.plot(train_accs, label='Train Acc (all)', c='r')
+                if self.dev_dir:
+                    ax2.plot(dev_accs, label='Devel Acc (all)', c='c')
+                    ax2.plot(dev_known_accs, label='Devel Acc (kno)', c='m')
+                    ax2.plot(dev_unknown_accs, label='Devel Acc (unk)',  c='y')
+                # hack: add dummy legend items;
+                ax2.plot(0, 0, label='Train Loss', c='b')
+                if self.dev_dir:
+                    ax2.plot(0, 0, label='Devel Loss', c='g')
+                plt.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3,
+                            ncol=3, mode="expand", borderaxespad=0., fontsize = 'x-small')
+                ax2.set_ylabel('Accuracy')
+                plt.savefig('losses.pdf')
+
+                with open('losses.tsv', 'w') as f:
+                    if self.dev_dir:
+                        f.write('idx\ttrain\tdev\n')
+                        for i in range(len(train_losses)):
+                            f.write('\t'.join((str(i+1), str(train_losses[i]), str(dev_losses[i])))+'\n')
+                    else:
+                        f.write('idx\ttrain\n')
+                        for i in range(len(train_losses)):
+                            f.write('\t'.join((str(i+1), str(train_losses[i])))+'\n')
+
+                with open('accs.tsv', 'w') as f:
+                    if self.dev_dir:
+                        f.write('idx\ttrain_all\tdev_all\tdev_known\tdev_unknown\n')
+                        for i in range(len(train_losses)):
+                            f.write('\t'.join((str(i+1), str(train_accs[i]),\
+                                                str(dev_accs[i]), str(dev_known_accs[i]),\
+                                                str(dev_unknown_accs[i])))+'\n')
+                    else:
+                        f.write('idx\ttrain_all\n')
+                        for i in range(len(train_losses)):
+                            f.write('\t'.join((str(i+1), str(train_accs[i])))+'\n')
 
             elif self.context_representation == "None":
                 print("-> epoch ", e+1, "...")
