@@ -1,9 +1,10 @@
 # Configuration file for Midas system
 
 [global]
-train_dir = ../data/crm-adelheid/full_train
-dev_dir = False
-test_dir = ../data/crm-adelheid/test
+train_dir = ../data/relig/train
+dev_dir = ../data/relig/dev
+test_dir = ../data/relig/test
+model_name = baha
 context_representation = flat_embeddings
 pretrain_embeddings = True
 target_representation = flat_convolution
@@ -15,9 +16,8 @@ left_char_len = 50
 nb_right_tokens = 1
 right_char_len = 25
 nb_epochs = 100
-batch_size = 30
+batch_size = 50
 nb_filters = 2048
 filter_length = 3
 nb_dense_dims = 1024
 embedding_dims = 300
-

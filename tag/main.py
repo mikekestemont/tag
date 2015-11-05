@@ -27,8 +27,8 @@ def main():
     else:
         raise ValueError("No config file specified.")
     
-    tagger = Tagger(config_path)
-    tagger.load_data(nb_instances=10000000000000, label_idxs=[1, 2])
+    tagger = Tagger(config_path=config_path)
+    tagger.load_data(nb_instances=1000, label_idxs=[2])
     tagger.encode_labels()
     tagger.vectorize_datasets()
     tagger.set_model()
