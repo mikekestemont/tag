@@ -41,7 +41,7 @@ class Tagger:
                     elif value == "False":
                         value = False
                     param_dict[name] = value
-
+            
             # set params:
             self.train_dir = param_dict['train_dir']
             self.dev_dir = param_dict['dev_dir']
@@ -63,14 +63,16 @@ class Tagger:
             self.filter_length = param_dict['filter_length']
             self.nb_dense_dims = param_dict['nb_dense_dims']
             self.embedding_dims = param_dict['embedding_dims']
+            self.min_train_token_count = param_dict['min_train_token_count']
 
             self.model_path = os.sep.join((MODELS_DIR, self.model_name))
             if not os.path.isdir(self.model_path):
                 os.mkdir(self.model_path)
             print(param_dict)
 
-        # make sure that we can reproduce the parametrization:
-        shutil.copy(config_path, os.sep.join((self.model_path, 'config.txt')))
+        # make sure that we can reproduce parametrization in case new model is trained:
+        if not os.path.exists(os.sep.join((self.model_path, 'config.txt'))):
+            shutil.copy(config_path, os.sep.join((self.model_path, 'config.txt')))
 
     def load_data(self, nb_instances, label_idxs):
         self.train_tokens, self.train_labels = \
@@ -89,7 +91,7 @@ class Tagger:
                                         nb_instances = nb_instances,
                                         label_idxs=label_idxs)
 
-    def encode_labels(self):
+    def encode_labels(self, load_pickles=False):
         # ignore boundary markers
         self.train_labels = [l for l in self.train_labels if l not in ("@", "$")]
         if self.dev_dir:
@@ -97,15 +99,22 @@ class Tagger:
         if self.test_dir:
             self.test_labels = [l for l in self.test_labels if l not in ("@", "$")]
         
-        # fit a labelencoder on all labels:
-        self.label_encoder = LabelEncoder()
-        lbls = self.train_labels
-        if self.dev_dir:
-           lbls.extend(self.dev_labels) 
-        if self.test_dir:
-            lbls.extend(self.test_labels)
+        if not load_pickles:
+            # fit a labelencoder on all labels:
+            self.label_encoder = LabelEncoder()
+            lbls = self.train_labels
+            if self.dev_dir:
+               lbls.extend(self.dev_labels) 
+            if self.test_dir:
+                lbls.extend(self.test_labels)
 
-        self.label_encoder.fit(lbls)
+            self.label_encoder.fit(lbls)
+
+            # pickle the label encoder:
+            with open(os.sep.join((self.model_path, 'label_encoder.p')), 'wb') as f:
+                pickle.dump(self.label_encoder, f)
+        else:
+            self.label_encoder = pickle.load(open(os.sep.join((self.model_path, 'label_encoder.p')), 'rb'))
 
         # transform labels to int representation:
         self.train_int_labels = self.label_encoder.transform(self.train_labels)
@@ -125,10 +134,6 @@ class Tagger:
         if self.test_dir:
             self.test_y = np_utils.to_categorical(self.test_int_labels,
                                                len(self.label_encoder.classes_))
-
-        # pickle the label encoder:
-        with open(os.sep.join((self.model_path, 'label_encoder.p')), 'wb') as f:
-            pickle.dump(self.label_encoder, f)
 
     def vectorize_instances(self, tokens):
         left_X, tokens_X, right_X, target_one_hots = [], [], [], []
@@ -211,17 +216,23 @@ class Tagger:
 
         return left_X, tokens_X, right_X, target_one_hots
 
-    def vectorize_datasets(self):
-        # fit dicts etc. on train data
-        self.train_char_vector_dict = utils.get_char_vector_dict(self.train_tokens)
-        self.train_token_index = utils.get_train_token_index(self.train_tokens)
+    def vectorize_datasets(self, load_pickles=False):
+        if not load_pickles:
+            # fit dicts etc. on train data
+            self.train_char_vector_dict = utils.get_char_vector_dict(self.train_tokens)
+            self.train_token_index = utils.get_train_token_index(self.train_tokens,
+                                                                 min_count=self.min_train_token_count) 
 
-        # dump fitted objects for reuse:
-        # pickle the label encoder:
-        with open(os.sep.join((self.model_path, 'train_char_vector_dict.p')), 'wb') as f:
-            pickle.dump(self.train_char_vector_dict, f)
-        with open(os.sep.join((self.model_path, 'train_token_index.p')), 'wb') as f:
-            pickle.dump(self.train_token_index, f)
+            # dump fitted objects for reuse:
+            # pickle the label encoder:
+            with open(os.sep.join((self.model_path, 'train_char_vector_dict.p')), 'wb') as f:
+                pickle.dump(self.train_char_vector_dict, f)
+            with open(os.sep.join((self.model_path, 'train_token_index.p')), 'wb') as f:
+                pickle.dump(self.train_token_index, f)
+
+        else:
+            self.train_char_vector_dict = pickle.load(open(os.sep.join((self.model_path, 'train_char_vector_dict.p')), 'rb'))
+            self.train_token_index = pickle.load(open(os.sep.join((self.model_path, 'train_token_index.p')), 'rb'))
 
         # transform training, dev and test data:
         self.train_left_X, self.train_tokens_X,\
@@ -237,18 +248,25 @@ class Tagger:
             self.test_right_X, self.test_target_one_hots = \
                         self.vectorize_instances(tokens=self.test_tokens)
 
-    def set_model(self):
+    def set_model(self, load_pickles=False):
         # get embeddings if necessary:
         self.embeddings = None
-        if self.pretrain_embeddings:
-            pretrainer = EmbeddingsPretrainer(tokens=self.train_tokens,
-                                              size=self.embedding_dims)
-            vocab = [k for k,v in sorted(self.train_token_index.items(),\
-                                        key=itemgetter(1))]
-            self.embeddings = pretrainer.get_weights(vocab)
-            # dump embeddings:
-            with open(os.sep.join((self.model_path, 'embeddings.p')), 'wb') as f:
-                pickle.dump(self.embeddings, f)
+        if self.pretrain_embeddings and self.context_representation != 'None':
+            if not load_pickles:
+                pretrainer = EmbeddingsPretrainer(tokens=self.train_tokens,
+                                                  size=self.embedding_dims,
+                                                  min_count=self.min_train_token_count)
+                vocab = [k for k,v in sorted(self.train_token_index.items(),\
+                                            key=itemgetter(1))]
+                self.embeddings = pretrainer.get_weights(vocab)
+                # dump embeddings:
+                with open(os.sep.join((self.model_path, 'embeddings.p')), 'wb') as f:
+                    pickle.dump(self.embeddings, f)
+                # visualize etc:
+                pretrainer.plot_mfi(outputfile=os.sep.join((self.model_path, 'embeddings.pdf')))
+                pretrainer.most_similar(outputfile=os.sep.join((self.model_path, 'neighbors.txt')))
+            else:
+                self.embeddings = pickle.load(open(os.sep.join((self.model_path, 'embeddings.p')), 'rb'))
 
         self.model = build_model(std_token_len=self.std_token_len,
                                  left_char_len=self.left_char_len,
@@ -326,11 +344,6 @@ class Tagger:
         dev_known_accs, dev_unknown_accs = [], []
 
         for e in range(self.nb_epochs):
-            # save
-            self.model.save_weights(os.sep.join((self.model_path, 'weights.hdf5')),\
-                overwrite=True)
-            # visualize:
-            self.inspect_filters()
             if self.context_representation != 'None':
                 print("-> epoch ", e+1, "...")
                 d = {'left_input': self.train_left_X,
@@ -513,3 +526,120 @@ class Tagger:
                     f.write('idx\ttrain_all\n')
                     for i in range(len(train_losses)):
                         f.write('\t'.join((str(i+1), str(train_accs[i])))+'\n')
+
+            # save
+            self.model.save_weights(os.sep.join((self.model_path, 'weights.hdf5')),\
+                overwrite=True)
+            # visualize:
+            self.inspect_filters()
+
+    def test(self):
+        if self.context_representation != 'None':
+            d = {'left_input': self.train_left_X,
+                    'target_input': self.train_tokens_X,
+                    'right_input': self.train_right_X,
+                    'target_one_hot_input': self.train_target_one_hots,
+                    'label_output': self.train_y,
+                }
+
+            print("+++ TRAIN SCORE")
+            train_loss = self.model.evaluate(data=d, batch_size = self.batch_size)
+            print("\t - loss:\t{:.3}".format(train_loss))
+
+            train_predictions = self.model.predict({'left_input': self.train_left_X,
+                                      'target_input': self.train_tokens_X,
+                                      'target_one_hot_input': self.train_target_one_hots,
+                                      'right_input': self.train_right_X,
+                                     },
+                                    batch_size = self.batch_size)
+            train_all_acc, _, _ = utils.accuracies(predictions = train_predictions,
+                                                   gold_labels = self.train_int_labels,
+                                                   test_tokens = self.train_tokens,
+                                                   train_token_set = self.train_token_set)
+            print("\t - all acc:\t{:.2%}".format(train_all_acc))
+                
+            if self.dev_dir:
+                print("+++ DEV SCORE")
+                d = {'left_input': self.dev_left_X,
+                     'target_input': self.dev_tokens_X,
+                     'right_input': self.dev_right_X,
+                     'target_one_hot_input': self.dev_target_one_hots,
+                    }
+                dev_predictions = self.model.predict(data=d, batch_size = self.batch_size)
+                d['label_output'] = self.dev_y
+                dev_loss = self.model.evaluate(data=d, batch_size = self.batch_size)
+                print("\t - loss:\t{:.3}".format(dev_loss))
+                dev_all_acc, dev_known_acc, dev_unknown_acc = utils.accuracies(predictions = dev_predictions,
+                                                                   gold_labels = self.dev_int_labels,
+                                                                   test_tokens = self.dev_tokens,
+                                                                   train_token_set = self.train_token_set)
+                print("\t - all acc:\t{:.2%}".format(dev_all_acc))
+                print("\t - known acc:\t{:.2%}".format(dev_known_acc))
+                print("\t - unknown acc:\t{:.2%}".format(dev_unknown_acc))
+
+            if self.test_dir:
+                print("+++ TEST SCORE")
+                test_predictions = self.model.predict({'left_input': self.test_left_X,
+                                          'target_input': self.test_tokens_X,
+                                          'right_input': self.test_right_X,
+                                          'target_one_hot_input': self.test_target_one_hots,
+                                         },
+                                         batch_size = self.batch_size)
+                test_all_acc, test_known_acc, test_unknown_acc = utils.accuracies(predictions = test_predictions,
+                                                                   gold_labels = self.test_int_labels,
+                                                                   test_tokens = self.test_tokens,
+                                                                   train_token_set = self.train_token_set)
+                print("\t - all acc:\t{:.2%}".format(test_all_acc))
+                print("\t - known acc:\t{:.2%}".format(test_known_acc))
+                print("\t - unknown acc:\t{:.2%}".format(test_unknown_acc))
+
+        elif self.context_representation == 'None':
+            d = {'target_input': self.train_tokens_X,
+                 'target_one_hot_input': self.train_target_one_hots,
+                 'label_output': self.train_y,
+                }
+            
+            print("+++ TRAIN SCORE")
+            train_loss = self.model.evaluate(data=d, batch_size = self.batch_size)
+            print("\t - loss:\t{:.3}".format(train_loss))
+
+            train_predictions = self.model.predict({'target_input': self.train_tokens_X,
+                                         'target_one_hot_input': self.train_target_one_hots},
+                                         batch_size = self.batch_size)
+            train_all_acc, _, _ = utils.accuracies(predictions = train_predictions,
+                                                                   gold_labels = self.train_int_labels,
+                                                                   test_tokens = self.train_tokens,
+                                                                   train_token_set = self.train_token_set)
+            print("\t - all acc:\t{:.2%}".format(train_all_acc))
+                
+            if self.dev_dir:
+                print("+++ DEV SCORE")
+                d = {'target_input': self.dev_tokens_X,
+                     'target_one_hot_input': self.dev_target_one_hots,
+                    }
+                dev_predictions = self.model.predict(data = d,
+                                         batch_size = self.batch_size)
+                d['label_output'] = self.dev_y
+                dev_loss = self.model.evaluate(data=d, batch_size = self.batch_size)
+                print("\t - loss:\t{:.3}".format(dev_loss))
+                dev_all_acc, dev_known_acc, dev_unknown_acc = utils.accuracies(predictions = dev_predictions,
+                                                                   gold_labels = self.dev_int_labels,
+                                                                   test_tokens = self.dev_tokens,
+                                                                   train_token_set = self.train_token_set)
+                print("\t - all acc:\t{:.2%}".format(dev_all_acc))
+                print("\t - known acc:\t{:.2%}".format(dev_known_acc))
+                print("\t - unknown acc:\t{:.2%}".format(dev_unknown_acc))
+
+            if self.test_dir:
+                print("+++ TEST SCORE")
+                test_predictions = self.model.predict({'target_input': self.test_tokens_X,
+                                         'target_one_hot_input': self.test_target_one_hots},
+                                         batch_size = self.batch_size)
+                test_all_acc, test_known_acc, test_unknown_acc = utils.accuracies(predictions = test_predictions,
+                                                                   gold_labels = self.test_int_labels,
+                                                                   test_tokens = self.test_tokens,
+                                                                   train_token_set = self.train_token_set)
+                print("\t - all acc:\t{:.2%}".format(test_all_acc))
+                print("\t - known acc:\t{:.2%}".format(test_known_acc))
+                print("\t - unknown acc:\t{:.2%}".format(test_unknown_acc))
+

@@ -23,7 +23,7 @@ def parse_cmd_line(config_path):
 
     config = ConfigParser.ConfigParser()
     config.read(config_path)
-
+    
     param_dict = dict()
 
     for section in config.sections():
@@ -83,11 +83,11 @@ def get_char_vector_dict(tokens):
         char_vector_dict[char] = ph
     return char_vector_dict
 
-def get_train_token_index(tokens):
+def get_train_token_index(tokens, min_count=10):
     counter = Counter(tokens)
     index = {'<unk>':0}
     for k, v in counter.items():
-        if v >= 1:
+        if v >= min_count:
             index[k] = len(index)
     return index
 
